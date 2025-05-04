@@ -1,0 +1,318 @@
+---
+title: "lab6"
+subtitle: "Ecosystem Science and Sustainability 330"
+author: 
+  - name: Nick Beegle
+    email: beegle99@colostate.edu
+format: html
+execute: 
+  echo: true
+---
+
+```{r}
+install.packages('tidyverse')
+install.packages('tidymodels')
+install.packages('powerjoin')
+install.packages('glue')
+install.packages('vip')
+install.packages('baguette')
+install.packages('purrr')
+```
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(powerjoin)
+library(glue)
+library(vip)
+library(baguette)
+library(purrr)
+```
+
+## Data Download
+
+```{r}
+download.file(
+  url = "https://gdex.ucar.edu/dataset/camels/file/camels_attributes_v2.0.pdf",
+  destfile = "data/camels_attributes_v2.0.pdf"
+)
+```
+
+## Download Basin Files
+
+```{r}
+root <- "https://gdex.ucar.edu/dataset/camels/file"
+types <- c("clim", "geol", "soil", "topo", "vege", "hydro")
+
+remote_files <- glue("{root}/camels_{types}.txt")
+local_files <- glue("data/camels_{types}.txt")
+
+walk2(remote_files, local_files, download.file, quiet = TRUE)
+```
+
+## Read and Merge Data
+
+```{r}
+camels <- map(local_files, read_delim, show_col_types = FALSE)
+
+camels <- power_full_join(camels, by = "gauge_id")
+```
+
+## Question 1:
+
+All files are found within the data folder in within the lab 6 directory.
+
+According to the CAMELS documentation PDF zero_q_freq represents the number of days were stream flow = 0.
+
+## Exploratory Data Analysis
+
+```{r}
+#install.packages('ggthemes')
+library(ggthemes)
+```
+
+```{r}
+ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray50") +
+  geom_point(aes(color = q_mean)) +
+  scale_color_gradient(low = "pink", high = "dodgerblue") +
+  ggthemes::theme_map()
+```
+
+## Question 2:
+
+```{r}
+map_aridity <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray50") +
+  geom_point(aes(color = aridity), size = 3, alpha = 0.7) +
+  scale_color_gradient(low = "lightyellow", high = "darkgreen") + # Aridity gradient
+  labs(
+    title = "CAMELS Sites by Aridity",
+    subtitle = "Sites colored by Aridity Index",
+    x = "Longitude",
+    y = "Latitude",
+    color = "Aridity"
+  ) +
+  ggthemes::theme_map() +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12)
+  )
+
+map_aridity
+```
+
+```{r}
+map_precip <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray50") +
+  geom_point(aes(color = p_mean), size = 3, alpha = 0.7) +
+  scale_color_gradient(low = "lightblue", high = "blue") + # Precipitation gradient
+  labs(
+    title = "CAMELS Sites by Mean Precipitation",
+    subtitle = "Sites colored by Mean Precipitation (mm)",
+    x = "Longitude",
+    y = "Latitude",
+    color = "Precipitation (mm)"
+  ) +
+  ggthemes::theme_map() +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(size = 16, face = "bold"),
+    plot.subtitle = element_text(size = 12)
+  )
+
+map_precip
+```
+
+## Model Preparation
+
+```{r}
+camels |> 
+  select(aridity, p_mean, q_mean) |> 
+  drop_na() |> 
+  cor()
+```
+
+## Visual EDA
+
+```{r}
+# Create a scatter plot of aridity vs rainfall
+ggplot(camels, aes(x = aridity, y = p_mean)) +
+  # Add points colored by mean flow
+  geom_point(aes(color = q_mean)) +
+  # Add a linear regression line
+  geom_smooth(method = "lm", color = "red", linetype = 2) +
+  # Apply the viridis color scale
+  scale_color_viridis_c() +
+  # Add a title, axis labels, and theme (w/ legend on the bottom)
+  theme_linedraw() + 
+  theme(legend.position = "bottom") + 
+  labs(title = "Aridity vs Rainfall vs Runnoff", 
+       x = "Aridity", 
+       y = "Rainfall",
+       color = "Mean Flow")
+```
+
+## Test a Transformation
+
+```{r}
+ggplot(camels, aes(x = aridity, y = p_mean)) +
+  geom_point(aes(color = q_mean)) +
+  geom_smooth(method = "lm") +
+  scale_color_viridis_c() +
+  # Apply log transformations to the x and y axes
+  scale_x_log10() + 
+  scale_y_log10() +
+  theme_linedraw() +
+  theme(legend.position = "bottom") + 
+  labs(title = "Aridity vs Rainfall vs Runnoff", 
+       x = "Aridity", 
+       y = "Rainfall",
+       color = "Mean Flow")
+```
+
+## Visualizing a Log Transform
+
+```{r}
+ggplot(camels, aes(x = aridity, y = p_mean)) +
+  geom_point(aes(color = q_mean)) +
+  geom_smooth(method = "lm") +
+  # Apply a log transformation to the color scale
+  scale_color_viridis_c(trans = "log") +
+  scale_x_log10() + 
+  scale_y_log10() +
+  theme_linedraw() +
+  theme(legend.position = "bottom",
+        # Expand the legend width ...
+        legend.key.width = unit(2.5, "cm"),
+        legend.key.height = unit(.5, "cm")) + 
+  labs(title = "Aridity vs Rainfall vs Runnoff", 
+       x = "Aridity", 
+       y = "Rainfall",
+       color = "Mean Flow") 
+```
+
+## Model Building
+
+```{r}
+set.seed(123)
+# Bad form to perform simple transformations on the outcome variable within a 
+# recipe. So, we'll do it here.
+camels <- camels |> 
+  mutate(logQmean = log(q_mean))
+
+# Generate the split
+camels_split <- initial_split(camels, prop = 0.8)
+camels_train <- training(camels_split)
+camels_test  <- testing(camels_split)
+
+camels_cv <- vfold_cv(camels_train, v = 10)
+```
+
+## Preprocessor: Recipie
+
+```{r}
+# Create a recipe to preprocess the data
+rec <-  recipe(logQmean ~ aridity + p_mean, data = camels_train) %>%
+  # Log transform the predictor variables (aridity and p_mean)
+  step_log(all_predictors()) %>%
+  # Add an interaction term between aridity and p_mean
+  step_interact(terms = ~ aridity:p_mean) |> 
+  # Drop any rows with missing values in the pred
+  step_naomit(all_predictors(), all_outcomes())
+```
+
+## Naive Base lm Approach:
+
+```{r}
+# Prepare the data
+baked_data <- prep(rec, camels_train) |> 
+  bake(new_data = NULL)
+
+# Interaction with lm
+#  Base lm sets interaction terms with the * symbol
+lm_base <- lm(logQmean ~ aridity * p_mean, data = baked_data)
+summary(lm_base)
+```
+
+```{r}
+# Sanity Interaction term from recipe ... these should be equal!!
+summary(lm(logQmean ~ aridity + p_mean + aridity_x_p_mean, data = baked_data))
+```
+
+## Using a workflow Instead:
+
+```{r}
+# Define model
+lm_model <- linear_reg() %>%
+  # define the engine
+  set_engine("lm") %>%
+  # define the mode
+  set_mode("regression")
+
+# Instantiate a workflow ...
+lm_wf <- workflow() %>%
+  # Add the recipe
+  add_recipe(rec) %>%
+  # Add the model
+  add_model(lm_model) %>%
+  # Fit the model to the training data
+  fit(data = camels_train) 
+
+# Extract the model coefficients from the workflow
+summary(extract_fit_engine(lm_wf))$coefficients
+```
+
+## Random Forest Model:
+
+```{r}
+install.packages('ranger')
+library(ranger)
+```
+
+```{r}
+rf_model <- rand_forest() %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("regression")
+
+rf_wf <- workflow() %>%
+  # Add the recipe
+  add_recipe(rec) %>%
+  # Add the model
+  add_model(rf_model) %>%
+  # Fit the model
+  fit(data = camels_train) 
+
+rf_wf
+```
+
+## Question 3: Build a xgboost (engine) regression (mode) model using boost_tree
+
+```{r}
+#install.packages("xgboost")
+library(xgboost)
+```
+
+```{r}
+xgb_model <- boost_tree(
+  mode = "regression",
+  trees = 1000,
+  tree_depth = 6,
+  learn_rate = 0.01
+) %>%
+  set_engine("xgboost")
+
+xgb_model
+```
+
+## Question 3: Build a neural network model using the nnet engine from the baguette package using the bag_mlp function
+
+```{r}
+nn_model <- bag_mlp(
+  mode = "regression"
+) %>%
+  set_engine("nnet", times = 25)
+
+nn_model
+```
