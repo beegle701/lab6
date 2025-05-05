@@ -1,0 +1,238 @@
+---
+title: "hyperparameter-tuning"
+subtitle: "Ecosystem Science and Sustainability 330"
+author: 
+  - name: Nick Beegle
+    email: beegle99@colostate.edu
+format: html
+self-contained: true
+execute: 
+  echo: true
+---
+
+## Data Import/Tidy/Transform
+
+### Library Loading
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(powerjoin)
+library(glue)
+library(vip)
+library(baguette)
+library(patchwork)
+library(ggthemes)
+```
+
+### Data Ingest
+
+```{r}
+root  <- 'https://gdex.ucar.edu/dataset/camels/file'
+download.file('https://gdex.ucar.edu/dataset/camels/file/camels_attributes_v2.0.pdf','data/camels_attributes_v2.0.pdf')
+
+# Types
+types <- c("clim", "geol", "soil", "topo", "vege", "hydro")
+remote_files  <- glue('{root}/camels_{types}.txt')
+local_files   <- glue('data/camels_{types}.txt')
+walk2(remote_files, local_files, download.file, quiet = TRUE)
+camels <- map(local_files, read_delim, show_col_types = FALSE)
+```
+
+### Data Cleaning
+
+```{r}
+camels <- power_full_join(camels ,by = 'gauge_id') |> 
+  mutate(logQmean = log(q_mean))
+```
+
+## Data Splitting
+
+### Initial Split
+
+```{r}
+set.seed(123)
+camels_split <- initial_split(camels, prop = 0.75)
+```
+
+### Testing/Training
+
+```{r}
+camels_train <- training(camels_split)
+camels_test  <- testing(camels_split)
+```
+
+## Feature Engineering
+
+### Proper Recipe
+
+```{r}
+rec <- recipe(logQmean ~ aridity + p_mean + soil_porosity, data = camels_train) %>%
+  step_log(all_predictors()) %>%
+  step_interact(terms = ~ aridity:p_mean) %>%
+  step_naomit(all_predictors(), all_outcomes())
+```
+
+## Data Resampling and Model Testing
+
+### Cross Validation Dataset
+
+```{r}
+folds <- vfold_cv(camels_train, v = 10)
+```
+
+### Define Three Regression Models
+
+```{r}
+log_mod <- linear_reg() %>%
+  set_engine("lm") %>%
+  set_mode("regression")
+
+tree_mod <- decision_tree() %>%
+  set_engine("rpart") %>%
+  set_mode("regression")
+
+rf_mod <- rand_forest() %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+```
+
+### Workflow Set/Map/Autoplot
+
+```{r}
+wf1 <- workflow_set(
+  preproc = list(rec),
+  models = list(log_mod, tree_mod, rf_mod)
+) %>% 
+  workflow_map(resamples = folds)
+
+autoplot(wf1)
+```
+
+### Model Selection with Justification
+
+```{r}
+ranked_results <- rank_results(wf1, rank_metric = "rsq", select_best = TRUE)
+print(ranked_results)
+```
+
+The random forest model has the highest R² and lowest RMSE, making it the best performing model.
+
+## Model Tuning
+
+### Tunable Model Setup
+
+```{r}
+tune_rf <- rand_forest(mtry = tune(), min_n = tune(), trees = 500) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+```
+
+### Tunable Workflow Defined
+
+```{r}
+wf_tune <- workflow() %>%
+  add_recipe(rec) %>%
+  add_model(tune_rf)
+```
+
+### Extract Dial Parameters from Model Workflow
+
+```{r}
+extract_parameter_set_dials(wf_tune)
+```
+
+### Description of Dial Ranges
+
+```{r}
+tune_dials <- parameters(wf_tune) %>%
+  finalize(select(camels_train, aridity, p_mean, soil_porosity))
+my.grid <- grid_latin_hypercube(tune_dials, size = 25)
+```
+
+### Defined Search Space and Executed Tune Grid
+
+```{r}
+model_params <- tune_grid(
+  wf_tune,
+  resamples = folds,
+  grid = my.grid,
+  metrics = metric_set(rmse, rsq, mae),
+  control = control_grid(save_pred = TRUE)
+)
+
+autoplot(model_params)
+```
+
+## Check the Skill of the Tuned Model
+
+```{r}
+show_best(model_params, metric = "rsq")
+```
+
+The best tuned model has a high R² (\~0.88), showing strong performance. This means our model explains \~88% of the variance in log runoff.
+
+## Finalize Your Model
+
+```{r}
+best_params <- select_best(model_params, metric = "rsq")
+final_rf <- finalize_workflow(wf_tune, best_params)
+```
+
+## Final Model Verification
+
+### Implement the Last Fit
+
+```{r}
+last_rf_fit <- last_fit(final_rf, split = camels_split)
+```
+
+### Interpret Metrics
+
+```{r}
+collect_metrics(last_rf_fit)
+```
+
+R² and RMSE confirm strong predictive accuracy.
+
+### Plot Predictions
+
+```{r}
+last_rf_aug <- augment(last_rf_fit)
+
+ggplot(last_rf_aug, aes(x = logQmean, y = .pred, color = aridity)) +
+  geom_point() +
+  geom_abline() +
+  scale_color_gradient(low = "red", high = "green") +
+  theme_linedraw() +
+  labs(title = "Final Model Predictions vs Observed", x = "Observed", y = "Predicted")
+```
+
+## Final Figure
+
+### Augment Data and Calculate Residuals
+
+```{r}
+aug_data <- last_rf_aug %>% 
+  mutate(resid = logQmean - .pred)
+```
+
+### Map Predicted Q and Residuals
+
+```{r}
+p1 <- ggplot(aug_data, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray") +
+  geom_point(aes(color = .pred)) +
+  scale_color_viridis_c() +
+  ggthemes::theme_map() +
+  labs(title = "Predicted Log Mean Flow")
+
+p2 <- ggplot(aug_data, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "gray") +
+  geom_point(aes(color = resid)) +
+  scale_color_gradient2(low = "red", mid = "white", high = "blue") +
+  ggthemes::theme_map() +
+  labs(title = "Residuals (Observed - Predicted)")
+
+p1 / p2
+```
