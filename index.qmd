@@ -10,122 +10,67 @@ execute:
 ---
 
 ```{r}
-install.packages('tidyverse')
-install.packages('tidymodels')
-install.packages('powerjoin')
-install.packages('glue')
-install.packages('vip')
-install.packages('baguette')
-install.packages('purrr')
-```
-
-```{r}
 library(tidyverse)
 library(tidymodels)
 library(powerjoin)
 library(glue)
 library(vip)
 library(baguette)
-library(purrr)
 ```
 
-## Data Download
-
 ```{r}
-download.file(
-  url = "https://gdex.ucar.edu/dataset/camels/file/camels_attributes_v2.0.pdf",
-  destfile = "data/camels_attributes_v2.0.pdf"
-)
-```
+root  <- 'https://gdex.ucar.edu/dataset/camels/file'
+download.file('https://gdex.ucar.edu/dataset/camels/file/camels_attributes_v2.0.pdf','data/camels_attributes_v2.0.pdf')
 
-## Download Basin Files
-
-```{r}
-root <- "https://gdex.ucar.edu/dataset/camels/file"
 types <- c("clim", "geol", "soil", "topo", "vege", "hydro")
-
-remote_files <- glue("{root}/camels_{types}.txt")
-local_files <- glue("data/camels_{types}.txt")
-
+# Where the files live online ...
+remote_files  <- glue('{root}/camels_{types}.txt')
+# where we want to download the data ...
+local_files   <- glue('data/camels_{types}.txt')
+# data download
 walk2(remote_files, local_files, download.file, quiet = TRUE)
-```
-
-## Read and Merge Data
-
-```{r}
+#read and murge data
 camels <- map(local_files, read_delim, show_col_types = FALSE)
-
-camels <- power_full_join(camels, by = "gauge_id")
 ```
-
-## Question 1:
-
-All files are found within the data folder in within the lab 6 directory.
-
-According to the CAMELS documentation PDF zero_q_freq represents the number of days were stream flow = 0.
-
-## Exploratory Data Analysis
 
 ```{r}
-#install.packages('ggthemes')
-library(ggthemes)
+camels <- power_full_join(camels ,by = 'gauge_id')
 ```
+
+## Question 1
+
+Q: What does zero_q_freq represent?
+
+zero_q_freq shows the frequency of when q=0 inmillimeters per day as a percentage.
 
 ```{r}
 ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
-  borders("state", colour = "gray50") +
+  borders("state", colour = "blue") +
   geom_point(aes(color = q_mean)) +
-  scale_color_gradient(low = "pink", high = "dodgerblue") +
+  scale_color_gradient(low = "red", high = "green") +
   ggthemes::theme_map()
 ```
 
-## Question 2:
+## Question 2
 
 ```{r}
-map_aridity <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
-  borders("state", colour = "gray50") +
-  geom_point(aes(color = aridity), size = 3, alpha = 0.7) +
-  scale_color_gradient(low = "lightyellow", high = "darkgreen") + # Aridity gradient
-  labs(
-    title = "CAMELS Sites by Aridity",
-    subtitle = "Sites colored by Aridity Index",
-    x = "Longitude",
-    y = "Latitude",
-    color = "Aridity"
-  ) +
-  ggthemes::theme_map() +
-  theme(
-    legend.position = "right",
-    plot.title = element_text(size = 16, face = "bold"),
-    plot.subtitle = element_text(size = 12)
-  )
+p1 <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "blue") +
+  geom_point(aes(color = aridity)) +
+  scale_color_gradient(low = "red", high = "green") +
+  labs(title = "Aridity of Sites") +
+  ggthemes::theme_map()
 
-map_aridity
+p2 <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
+  borders("state", colour = "blue") +
+  geom_point(aes(color = p_mean)) +
+  scale_color_gradient(low = "red", high = "green") +
+  ggthemes::theme_map() + 
+  labs(title = "P Mean of Sites")
+library(patchwork)
+print(p1 | p2)
+
 ```
-
-```{r}
-map_precip <- ggplot(data = camels, aes(x = gauge_lon, y = gauge_lat)) +
-  borders("state", colour = "gray50") +
-  geom_point(aes(color = p_mean), size = 3, alpha = 0.7) +
-  scale_color_gradient(low = "lightblue", high = "blue") + # Precipitation gradient
-  labs(
-    title = "CAMELS Sites by Mean Precipitation",
-    subtitle = "Sites colored by Mean Precipitation (mm)",
-    x = "Longitude",
-    y = "Latitude",
-    color = "Precipitation (mm)"
-  ) +
-  ggthemes::theme_map() +
-  theme(
-    legend.position = "right",
-    plot.title = element_text(size = 16, face = "bold"),
-    plot.subtitle = element_text(size = 12)
-  )
-
-map_precip
-```
-
-## Model Preparation
 
 ```{r}
 camels |> 
@@ -133,8 +78,6 @@ camels |>
   drop_na() |> 
   cor()
 ```
-
-## Visual EDA
 
 ```{r}
 # Create a scatter plot of aridity vs rainfall
@@ -154,8 +97,6 @@ ggplot(camels, aes(x = aridity, y = p_mean)) +
        color = "Mean Flow")
 ```
 
-## Test a Transformation
-
 ```{r}
 ggplot(camels, aes(x = aridity, y = p_mean)) +
   geom_point(aes(color = q_mean)) +
@@ -171,8 +112,6 @@ ggplot(camels, aes(x = aridity, y = p_mean)) +
        y = "Rainfall",
        color = "Mean Flow")
 ```
-
-## Visualizing a Log Transform
 
 ```{r}
 ggplot(camels, aes(x = aridity, y = p_mean)) +
@@ -193,16 +132,13 @@ ggplot(camels, aes(x = aridity, y = p_mean)) +
        color = "Mean Flow") 
 ```
 
-## Model Building
-
 ```{r}
 set.seed(123)
-# Bad form to perform simple transformations on the outcome variable within a 
-# recipe. So, we'll do it here.
+
 camels <- camels |> 
   mutate(logQmean = log(q_mean))
 
-# Generate the split
+
 camels_split <- initial_split(camels, prop = 0.8)
 camels_train <- training(camels_split)
 camels_test  <- testing(camels_split)
@@ -210,38 +146,48 @@ camels_test  <- testing(camels_split)
 camels_cv <- vfold_cv(camels_train, v = 10)
 ```
 
-## Preprocessor: Recipie
-
 ```{r}
-# Create a recipe to preprocess the data
+
 rec <-  recipe(logQmean ~ aridity + p_mean, data = camels_train) %>%
-  # Log transform the predictor variables (aridity and p_mean)
   step_log(all_predictors()) %>%
-  # Add an interaction term between aridity and p_mean
   step_interact(terms = ~ aridity:p_mean) |> 
-  # Drop any rows with missing values in the pred
   step_naomit(all_predictors(), all_outcomes())
 ```
 
-## Naive Base lm Approach:
-
 ```{r}
-# Prepare the data
+
 baked_data <- prep(rec, camels_train) |> 
   bake(new_data = NULL)
 
-# Interaction with lm
-#  Base lm sets interaction terms with the * symbol
 lm_base <- lm(logQmean ~ aridity * p_mean, data = baked_data)
 summary(lm_base)
 ```
 
 ```{r}
-# Sanity Interaction term from recipe ... these should be equal!!
 summary(lm(logQmean ~ aridity + p_mean + aridity_x_p_mean, data = baked_data))
 ```
 
-## Using a workflow Instead:
+```{r}
+test_data <-  bake(prep(rec), new_data = camels_test)
+test_data$lm_pred <- predict(lm_base, newdata = test_data)
+```
+
+```{r}
+metrics(test_data, truth = logQmean, estimate = lm_pred)
+```
+
+```{r}
+ggplot(test_data, aes(x = logQmean, y = lm_pred, colour = aridity)) +
+  # Apply a gradient color scale
+  scale_color_gradient2(low = "red", mid = "blue", high = "green") +
+  geom_point() +
+  geom_abline(linetype = 2) +
+  theme_linedraw() + 
+  labs(title = "Linear Model: Observed vs Predicted",
+       x = "Observed Log Mean Flow",
+       y = "Predicted Log Mean Flow",
+       color = "Aridity")
+```
 
 ```{r}
 # Define model
@@ -264,14 +210,29 @@ lm_wf <- workflow() %>%
 summary(extract_fit_engine(lm_wf))$coefficients
 ```
 
-## Random Forest Model:
-
 ```{r}
-install.packages('ranger')
-library(ranger)
+summary(lm_base)$coefficients
 ```
 
 ```{r}
+
+lm_data <- augment(lm_wf, new_data = camels_test)
+dim(lm_data)
+```
+
+```{r}
+metrics(lm_data, truth = logQmean, estimate = .pred)
+
+ggplot(lm_data, aes(x = logQmean, y = .pred, colour = aridity)) +
+  scale_color_viridis_c() +
+  geom_point() +
+  geom_abline() +
+  theme_linedraw()
+```
+
+```{r}
+library(baguette)
+library(ranger)
 rf_model <- rand_forest() %>%
   set_engine("ranger", importance = "impurity") %>%
   set_mode("regression")
@@ -283,36 +244,162 @@ rf_wf <- workflow() %>%
   add_model(rf_model) %>%
   # Fit the model
   fit(data = camels_train) 
-
-rf_wf
 ```
 
-## Question 3: Build a xgboost (engine) regression (mode) model using boost_tree
+```{r}
+rf_data <- augment(rf_wf, new_data = camels_test)
+dim(rf_data)
+```
 
 ```{r}
-#install.packages("xgboost")
+metrics(rf_data, truth = logQmean, estimate = .pred)
+
+ggplot(rf_data, aes(x = logQmean, y = .pred, colour = aridity)) +
+  scale_color_viridis_c() +
+  geom_point() +
+  geom_abline() +
+  theme_linedraw()
+```
+
+```{r}
+wf <- workflow_set(list(rec), list(lm_model, rf_model)) %>%
+  workflow_map('fit_resamples', resamples = camels_cv) 
+
+autoplot(wf)
+```
+
+```{r}
+rank_results(wf, rank_metric = "rsq", select_best = TRUE)
+```
+
+## Question 3
+
+```{r}
+xgb_model <- boost_tree() %>%
+  set_engine("xgboost") %>%
+  set_mode("regression")
+
+nn_model <- bag_mlp() %>%
+  set_engine("nnet") %>%
+  set_mode("regression")
+
+```
+
+```{r}
 library(xgboost)
+wf <- workflow_set(list(rec), list(lm_model, rf_model, xgb_model, nn_model)) %>%
+  workflow_map('fit_resamples', resamples = camels_cv) 
+
+autoplot(wf)
 ```
 
 ```{r}
-xgb_model <- boost_tree(
-  mode = "regression",
-  trees = 1000,
-  tree_depth = 6,
-  learn_rate = 0.01
-) %>%
-  set_engine("xgboost")
-
-xgb_model
+rank_results(wf, rank_metric = "rsq", select_best = TRUE)
 ```
 
-## Question 3: Build a neural network model using the nnet engine from the baguette package using the bag_mlp function
+Q: Which of the 4 models would you move forward with?
+
+The model with the highest r-squared test value should be the best fit. In this case it is a neural network.
+
+## Question 4
+
+**Data Splitting**
 
 ```{r}
-nn_model <- bag_mlp(
-  mode = "regression"
-) %>%
-  set_engine("nnet", times = 25)
+set.seed(123)
 
-nn_model
+camels1 <- camels |> 
+  mutate(logQmean = log(q_mean))
+
+camels_split <- initial_split(camels1, prop = 0.75)
+camels_train <- training(camels_split)
+camels_test  <- testing(camels_split)
+
+camels_cv <- vfold_cv(camels_train, v = 10)
+
 ```
+
+**Recipe**
+
+```{r}
+
+rec1 <-  recipe(logQmean ~ aridity + p_mean + soil_porosity, data = camels_train) %>%
+  step_log(all_predictors()) %>%
+  step_interact(terms = ~ aridity:p_mean) %>%  
+  step_naomit(all_predictors(), all_outcomes())
+
+
+baked_data <- prep(rec1, camels_train) |> 
+  bake(new_data = NULL)
+
+lm_base1 <- lm(logQmean ~ ., data = baked_data)
+summary(lm_base1)
+
+```
+
+Q: Why are you choosing this formula?
+
+I am choosing soil porosity for my model's predictor because there is a direct effect on discharge. I believe the higher the porosity the less discharge as the soil will retain more moisture. The lower the porosity the higher the discharge will be as the water can more easily run off the soil.
+
+**Define 3 Models**
+
+```{r}
+rf_mod <- rand_forest() %>% 
+  set_engine('ranger') %>% 
+  set_mode("regression")
+
+b_mod <- boost_tree() %>% 
+  set_engine('xgboost') %>% 
+  set_mode("regression")
+
+nn_mod <- mlp(hidden = 10) %>% 
+  set_engine('nnet') %>% 
+  set_mode("regression")
+```
+
+**Workflow set**
+
+```{r}
+wf1 <- workflow_set(list(rec1), list(
+                                   rf_mod,
+                                   b_mod,
+                                   nn_mod)) %>% 
+  workflow_map(resamples = camels_cv)
+
+```
+
+Q: What model works the best and why?
+
+The random forest model has the highest r-squared value and lowest root mean squared error so it looks like the most accurate.
+
+```{r}
+autoplot(wf1) 
+
+ranked_results <- rank_results(wf1, rank_metric = "rsq",
+               select_best = TRUE)
+print(ranked_results)
+```
+
+**Extract and Evaluate**
+
+```{r}
+rf_wf1 <- workflow() %>%
+  add_recipe(rec1) %>%
+  add_model(rf_mod) %>%
+  fit(data = camels_train) 
+
+
+rf_data <- augment(rf_wf1, new_data = camels_test)
+dim(rf_data)
+
+ggplot(rf_data, aes(x = logQmean, y = .pred, colour = aridity)) +
+  scale_color_gradient(low = "red", high = "green") +
+  geom_point() +
+  geom_abline() +
+  theme_linedraw()
+
+```
+
+Q: What do you think of the results?
+
+I think that the model is working well. The points are mostly around the line of best fit with few outliers probably due to prediction errors. In general the model seems to accuratley capture the relationship.
