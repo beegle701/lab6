@@ -5,6 +5,7 @@ author:
   - name: Nick Beegle
     email: beegle99@colostate.edu
 format: html
+self-contained: true
 execute: 
   echo: true
 ---
